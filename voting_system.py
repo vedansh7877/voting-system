@@ -9,7 +9,7 @@ from contextlib import contextmanager
 app = Flask(__name__)
 app.secret_key = 'super-secret-voting-key-2024-change-this!'
 
-# Database path - use environment variable if available
+# Database path - use /tmp for Render (ephemeral storage)
 DB_PATH = os.environ.get('DATABASE_PATH', 'voting.db')
 
 # HTML Templates (embedded)
@@ -248,7 +248,7 @@ def get_db():
         conn.row_factory = sqlite3.Row
         yield conn
     except Exception as e:
-        print(f"Database error: {e}")
+        print(f"❌ Database connection error: {e}")
         raise
     finally:
         try:
@@ -256,43 +256,52 @@ def get_db():
         except:
             pass
 
-def init_db():
+def ensure_db_exists():
+    """Initialize database on app startup"""
     try:
         with get_db() as db:
-            db.execute('''CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL,
-                password TEXT NOT NULL,
-                is_admin INTEGER DEFAULT 0,
-                has_voted INTEGER DEFAULT 0
-            )''')
-            
-            db.execute('''CREATE TABLE IF NOT EXISTS candidates (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                position TEXT NOT NULL,
-                description TEXT,
-                votes INTEGER DEFAULT 0
-            )''')
-            
-            # Create admin user
-            admin_hash = generate_password_hash('admin123')
-            db.execute("INSERT OR IGNORE INTO users (username, password, is_admin) VALUES (?, ?, 1)", 
-                      ('admin', admin_hash))
-            
-            # Add sample candidates
-            db.execute("INSERT OR IGNORE INTO candidates (name, position, description) VALUES (?, ?, ?)",
-                      ('Alice Johnson', 'President', 'Experienced leader with 10+ years in community service'))
-            db.execute("INSERT OR IGNORE INTO candidates (name, position, description) VALUES (?, ?, ?)",
-                      ('Bob Smith', 'President', 'Young innovator focused on technology and education'))
-            db.execute("INSERT OR IGNORE INTO candidates (name, position, description) VALUES (?, ?, ?)",
-                      ('Carol Davis', 'Vice President', 'Champion for environmental sustainability'))
-            db.execute("INSERT OR IGNORE INTO candidates (name, position, description) VALUES (?, ?, ?)",
-                      ('David Wilson', 'Vice President', 'Business expert with proven track record'))
-            db.commit()
-            print("✅ Database initialized successfully")
+            # Check if tables exist
+            cursor = db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='candidates'")
+            if not cursor.fetchone():
+                print("📝 Creating database tables...")
+                
+                db.execute('''CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT UNIQUE NOT NULL,
+                    password TEXT NOT NULL,
+                    is_admin INTEGER DEFAULT 0,
+                    has_voted INTEGER DEFAULT 0
+                )''')
+                
+                db.execute('''CREATE TABLE IF NOT EXISTS candidates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    position TEXT NOT NULL,
+                    description TEXT,
+                    votes INTEGER DEFAULT 0
+                )''')
+                
+                # Create admin user
+                admin_hash = generate_password_hash('admin123')
+                db.execute("INSERT OR IGNORE INTO users (username, password, is_admin) VALUES (?, ?, 1)", 
+                          ('admin', admin_hash))
+                
+                # Add sample candidates
+                db.execute("INSERT OR IGNORE INTO candidates (name, position, description) VALUES (?, ?, ?)",
+                          ('Alice Johnson', 'President', 'Experienced leader with 10+ years in community service'))
+                db.execute("INSERT OR IGNORE INTO candidates (name, position, description) VALUES (?, ?, ?)",
+                          ('Bob Smith', 'President', 'Young innovator focused on technology and education'))
+                db.execute("INSERT OR IGNORE INTO candidates (name, position, description) VALUES (?, ?, ?)",
+                          ('Carol Davis', 'Vice President', 'Champion for environmental sustainability'))
+                db.execute("INSERT OR IGNORE INTO candidates (name, position, description) VALUES (?, ?, ?)",
+                          ('David Wilson', 'Vice President', 'Business expert with proven track record'))
+                db.commit()
+                print("✅ Database initialized successfully")
+            else:
+                print("✅ Database already exists")
     except Exception as e:
         print(f"❌ Database initialization error: {e}")
+        raise
 
 @app.route('/', methods=['GET'])
 def index():
@@ -315,7 +324,7 @@ def index():
                                     user_has_voted=user_has_voted,
                                     session=session)
     except Exception as e:
-        print(f"Error in index: {e}")
+        print(f"❌ Error in index: {e}")
         return f"<h1>Error: {e}</h1>", 500
 
 @app.route('/login', methods=['POST'])
@@ -337,6 +346,7 @@ def login():
         
         return redirect(url_for('index'))
     except Exception as e:
+        print(f"❌ Error in login: {e}")
         flash(f'❌ Error: {e}', 'error')
         return redirect(url_for('index'))
 
@@ -357,6 +367,7 @@ def register():
         except sqlite3.IntegrityError:
             flash('❌ Username already exists!', 'error')
         except Exception as e:
+            print(f"❌ Error in register: {e}")
             flash(f'❌ Error: {e}', 'error')
     
     return render_template_string(REGISTER_HTML)
@@ -395,6 +406,7 @@ def vote(candidate_id):
         
         return redirect(url_for('index'))
     except Exception as e:
+        print(f"❌ Error in vote: {e}")
         flash(f'❌ Error voting: {e}', 'error')
         return redirect(url_for('index'))
 
@@ -419,6 +431,7 @@ def admin():
         
         return redirect(url_for('index'))
     except Exception as e:
+        print(f"❌ Error in admin: {e}")
         flash(f'❌ Error: {e}', 'error')
         return redirect(url_for('index'))
 
@@ -431,6 +444,7 @@ def results():
         
         return render_template_string(RESULTS_HTML, candidates=candidates, total_votes=total_votes)
     except Exception as e:
+        print(f"❌ Error in results: {e}")
         return f"<h1>Error: {e}</h1>", 500
 
 @app.route('/logout')
@@ -443,10 +457,17 @@ def logout():
 def internal_error(error):
     return f"<h1>Internal Server Error</h1><p>{str(error)}</p>", 500
 
+# Initialize database when app starts
+try:
+    ensure_db_exists()
+except Exception as e:
+    print(f"❌ Failed to initialize database: {e}")
+
 if __name__ == '__main__':
-    init_db()
+    ensure_db_exists()
     print("🚀 Voting System Ready!")
     print("🌐 Open: http://localhost:5000")
     print("👤 Admin: admin / admin123")
     print(f"💾 Database: {DB_PATH}")
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
